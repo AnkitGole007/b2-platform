@@ -9,6 +9,7 @@ from e2e.assertions import actual_outcome, assert_case, classification, expected
 from e2e.cases import Case
 from e2e.local_app import register_local_media
 from e2e.payloads import meta_media_payload, meta_text_payload, mime_for_path
+from e2e.summary_tool import summarize_case_result
 
 
 def run_all(
@@ -121,7 +122,7 @@ def run_case(
     classified_as = classification(expected_value, actual_value)
     passed = not errors and classified_as != "UNKNOWN"
 
-    return {
+    result = {
         "case": case.label,
         "country": case.country,
         "kind": case.kind,
@@ -140,6 +141,8 @@ def run_case(
         "errors": errors,
         "passed": passed,
     }
+    result["summary_tool_response"] = summarize_case_result(result)
+    return result
 
 
 def post_turn(

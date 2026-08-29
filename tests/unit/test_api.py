@@ -117,6 +117,10 @@ async def _run_direct(func, **kwargs):
     return func(**kwargs)
 
 
+async def _no_summary(**kwargs):
+    return None
+
+
 # ---------------------------------------------------------------------------
 # _extract_message unit tests
 # ---------------------------------------------------------------------------
@@ -127,6 +131,7 @@ def test_extract_message_text():
     assert msg.wa_id == "16508106640"
     assert msg.text == "Hello B2, what is Givelight?"
     assert msg.media_id is None
+    assert msg.phone_number_id == "1104821716055506"
 
 
 def test_extract_message_status_update_returns_empty():
@@ -143,6 +148,7 @@ def test_extract_message_image_returns_media_id():
     assert msg.text is None
     assert msg.media_id == "media-123"
     assert msg.mime_type == "image/jpeg"
+    assert msg.phone_number_id is None
 
 
 def test_extract_message_empty_payload():
@@ -225,6 +231,7 @@ async def test_message_image_downloads_and_calls_chat(monkeypatch):
     monkeypatch.setattr(api_module, "download_media", fake_download)
     monkeypatch.setattr(api_module, "chat", fake_chat)
     monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", _no_summary)
 
     response = await api_module.message_endpoint(FakeRequest(IMAGE_PAYLOAD))
     assert response == {"response": "Your request is being processed."}
@@ -247,6 +254,7 @@ async def test_message_text_calls_chat(monkeypatch):
 
     monkeypatch.setattr(api_module, "chat", fake_chat)
     monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", _no_summary)
 
     response = await api_module.message_endpoint(FakeRequest(SAMPLE_TEXT_PAYLOAD))
     assert response == {"response": "Givelight is an orphan aid programme."}
@@ -254,7 +262,7 @@ async def test_message_text_calls_chat(monkeypatch):
     assert captured["session_id"] == "16508106640"
 
 
-def test_message_text_debug_requires_env_and_header(monkeypatch):
+async def test_message_text_debug_requires_env_and_header(monkeypatch):
     import src.api as api_module
     monkeypatch.setattr(api_module, "_WEBHOOK_SECRET", "")
     monkeypatch.setattr(api_module, "_ENABLE_E2E_DEBUG", "true")
@@ -266,15 +274,118 @@ def test_message_text_debug_requires_env_and_header(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(api_module, "chat", fake_chat)
+    monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", _no_summary)
 
-    client = TestClient(api_module.app)
-    r = client.post("/message", json=SAMPLE_TEXT_PAYLOAD)
-    assert r.status_code == 200
-    assert r.json() == {"response": "ok"}
-    assert captured["debug_events"] is None
+    response = await api_module.message_endpoint(FakeRequest(SAMPLE_TEXT_PAYLOAD))
+    assert response == {"response": "ok"}
+    assert captured["debug_events"] == []
 
 
-def test_message_text_debug_returns_tool_results(monkeypatch):
+async def test_message_text_sends_summary_tool_response_as_second_message(monkeypatch):
+    import src.api as api_module
+    monkeypatch.setattr(api_module, "_WEBHOOK_SECRET", "")
+
+    captured = {}
+
+    def fake_chat(*, text, session_id, debug_events=None, **kwargs):
+        debug_events.append(
+            {
+                "tool": "death_certificate_verification",
+                "accepted": True,
+                "handed_off": True,
+                "summary": "Verification passed.",
+                "flags": [],
+            }
+        )
+        return "The request was accepted."
+
+    async def fake_generate_summary(*, final_response, tool_events):
+        captured["summary_input"] = {
+            "final_response": final_response,
+            "tool_events": list(tool_events),
+        }
+        return "Your certificate was verified and forwarded to GiveLight."
+
+    async def fake_send_text_message(*, wa_id, text, phone_number_id=None):
+        captured["send"] = {
+            "wa_id": wa_id,
+            "text": text,
+            "phone_number_id": phone_number_id,
+        }
+        return True
+
+    monkeypatch.setattr(api_module, "chat", fake_chat)
+    monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "can_send_text_message", lambda *, wa_id, phone_number_id=None: True)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", fake_generate_summary)
+    monkeypatch.setattr(api_module, "send_text_message", fake_send_text_message)
+
+    response = await api_module.message_endpoint(FakeRequest(SAMPLE_TEXT_PAYLOAD))
+
+    assert response == {"response": "The request was accepted."}
+    assert captured["summary_input"]["final_response"] == "The request was accepted."
+    assert captured["summary_input"]["tool_events"][0]["summary"] == "Verification passed."
+    assert captured["send"] == {
+        "wa_id": "16508106640",
+        "text": "Your certificate was verified and forwarded to GiveLight.",
+        "phone_number_id": "1104821716055506",
+    }
+
+
+async def test_message_text_skips_summary_when_outbound_is_not_configured(monkeypatch):
+    import src.api as api_module
+    monkeypatch.setattr(api_module, "_WEBHOOK_SECRET", "")
+
+    called = {"summary": False}
+
+    def fake_chat(*, text, session_id, debug_events=None, **kwargs):
+        return "ok"
+
+    async def fake_generate_summary(*, final_response, tool_events):
+        called["summary"] = True
+        return "summary"
+
+    monkeypatch.setattr(api_module, "chat", fake_chat)
+    monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "can_send_text_message", lambda *, wa_id, phone_number_id=None: False)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", fake_generate_summary)
+
+    response = await api_module.message_endpoint(FakeRequest(SAMPLE_TEXT_PAYLOAD))
+
+    assert response == {"response": "ok"}
+    assert called["summary"] is False
+
+
+async def test_message_text_keeps_original_response_when_summary_generation_fails(monkeypatch):
+    import src.api as api_module
+    monkeypatch.setattr(api_module, "_WEBHOOK_SECRET", "")
+
+    sent = {"called": False}
+
+    def fake_chat(*, text, session_id, debug_events=None, **kwargs):
+        return "ok"
+
+    async def fake_generate_summary(*, final_response, tool_events):
+        return None
+
+    async def fake_send_text_message(*, wa_id, text, phone_number_id=None):
+        sent["called"] = True
+        return True
+
+    monkeypatch.setattr(api_module, "chat", fake_chat)
+    monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "can_send_text_message", lambda *, wa_id, phone_number_id=None: True)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", fake_generate_summary)
+    monkeypatch.setattr(api_module, "send_text_message", fake_send_text_message)
+
+    response = await api_module.message_endpoint(FakeRequest(SAMPLE_TEXT_PAYLOAD))
+
+    assert response == {"response": "ok"}
+    assert sent["called"] is False
+
+
+async def test_message_text_debug_returns_tool_results(monkeypatch):
     import src.api as api_module
     monkeypatch.setattr(api_module, "_WEBHOOK_SECRET", "")
     monkeypatch.setattr(api_module, "_ENABLE_E2E_DEBUG", "yes")
@@ -297,11 +408,11 @@ def test_message_text_debug_returns_tool_results(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(api_module, "chat", fake_chat)
+    monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", _no_summary)
 
-    client = TestClient(api_module.app)
-    r = client.post("/message", json=SAMPLE_TEXT_PAYLOAD, headers={"X-E2E-Debug": "true"})
-    assert r.status_code == 200
-    assert r.json() == {
+    response = await api_module.message_endpoint(FakeRequest(SAMPLE_TEXT_PAYLOAD), x_e2e_debug="true")
+    assert response == {
         "response": "ok",
         "debug": {
             "session_id": "16508106640",
@@ -358,6 +469,7 @@ async def test_message_correct_secret_passes(monkeypatch):
     monkeypatch.setattr(api_module, "_WEBHOOK_SECRET", "mysecret")
     monkeypatch.setattr(api_module, "chat", lambda *, text, **kw: "ok")
     monkeypatch.setattr(api_module, "run_in_threadpool", _run_direct)
+    monkeypatch.setattr(api_module, "generate_summary_tool_response", _no_summary)
 
     response = await api_module.message_endpoint(
         FakeRequest(SAMPLE_TEXT_PAYLOAD),

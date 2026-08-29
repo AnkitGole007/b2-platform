@@ -54,17 +54,18 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Cases",
             "",
-            "| Case | Result | Expected | Actual | Class | Final Response Chars | Errors |",
-            "| --- | --- | --- | --- | --- | ---: | --- |",
+            "| Case | Result | Expected | Actual | Class | Final Response Chars | Summary Tool Response | Errors |",
+            "| --- | --- | --- | --- | --- | ---: | --- | --- |",
         ]
     )
     for result in report["results"]:
         status = "PASS" if result["passed"] else "FAIL"
-        errors = "<br>".join(result["errors"]) if result["errors"] else ""
+        errors = _markdown_cell("<br>".join(result["errors"]) if result["errors"] else "")
+        summary_tool_response = _markdown_cell(result.get("summary_tool_response"))
         lines.append(
             f"| `{result['case']}` | {status} | {result['expected_outcome']} | "
             f"{result['actual_outcome']} | {result['classification']} | "
-            f"{len(result['final_response'])} | {errors} |"
+            f"{len(result['final_response'])} | {summary_tool_response} | {errors} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -83,3 +84,6 @@ def _percent(value: float | None) -> str:
         return "n/a"
     return f"{value:.1%}"
 
+
+def _markdown_cell(value: Any) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", "<br>")
