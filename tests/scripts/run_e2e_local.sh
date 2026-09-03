@@ -33,6 +33,7 @@ trap restore_enable_e2e_debug EXIT
 
 export ENABLE_E2E_DEBUG=true
 export E2E_DISABLE_WHATSAPP_OUTBOUND=true
+export ALLOW_UNAUTHENTICATED_WEBHOOK=true
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "FAIL: uv is not installed or not on PATH" >&2
