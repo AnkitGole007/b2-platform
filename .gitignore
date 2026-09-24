@@ -11,7 +11,6 @@ __pycache__/
 venv/
 dist/
 build/
-docs/
 
 # GCP credentials
 *.json
@@ -44,12 +43,6 @@ tools/fake_image_detector/local_samples/
 tools/fake_image_detector/models/
 tests/fixtures/dataset/
 
-# Docker
-Dockerfile
-Dockerfile*
-Docker*
-
-
 # Scripts
 run_live_gemini_test_plan*
 
@@ -58,6 +51,3 @@ tests/test_dc/*
 !tests/test_dc/README.md
 e2e_cases/example/fake/*
 !e2e_cases/example/fake/case_000
-
-
-
