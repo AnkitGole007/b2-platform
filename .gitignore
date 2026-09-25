@@ -15,6 +15,7 @@ build/
 # GCP credentials
 *.json
 !e2e_cases/**/*.json
+!deploy/cloud_run_config.json
 service-account*.json
 
 # IDE
