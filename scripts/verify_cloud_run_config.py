@@ -87,8 +87,7 @@ def main() -> int:
     warnings: list[str] = []
 
     for name in config.get("required_env", []):
-        if name not in names:
-            failures.append(f"missing required env var: {name}")
+        if not any(e.get("name") == name and e.get("value") for e in env):
 
     for name in config.get("required_secrets", []):
         if name not in names:
